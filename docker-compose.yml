@@ -4,6 +4,8 @@ services:
   gateway:
     build: ./gateway
     env_file: ./gateway/.env
+    ports:
+      - "3000:3000"
     restart: always
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
