@@ -1,10 +1,14 @@
 
+'use strict';
+
 const express = require('express');
 const axios = require('axios');
 const winston = require('winston');
 require('dotenv').config();
 
 const app = express();
+
+// Accept JSON and vendor JSON (e.g., application/*+json)
 app.use(express.json({ type: ['application/json', 'application/*+json'] }));
 
 // Logger
@@ -31,21 +35,32 @@ const {
 
 // Basic validation for required OAuth inputs
 if (!SERVICENOW_INSTANCE) {
-  logger.error('SERVICENOW_INSTANCE is required'); process.exit(1);
+  logger.error('SERVICENOW_INSTANCE is required');
+  process.exit(1);
 }
 if (!SERVICENOW_OAUTH_CLIENT_ID || !SERVICENOW_OAUTH_CLIENT_SECRET) {
-  logger.error('OAuth CLIENT_ID and CLIENT_SECRET are required'); process.exit(1);
+  logger.error('OAuth CLIENT_ID and CLIENT_SECRET are required');
+  process.exit(1);
 }
 
-// Allowed projects
-const allowedProjects = SONARQUBE_PROJECTS.split(',').map(p => p.trim()).filter(Boolean);
+// Allowed projects (comma-separated)
+const allowedProjects = SONARQUBE_PROJECTS
+  .split(',')
+  .map((p) => p.trim())
+  .filter(Boolean);
 
-// 🔧 Per-project routing (use sys_ids in production)
+// 🔧 Per-project routing (replace with sys_ids in production)
 const projectIncidentConfig = {
   project1: { assignment_group: 'DevOps Team A', caller_id: 'john.doe', urgency: '2', impact: '2', severity: '2' },
   project2: { assignment_group: 'DevOps Team B', caller_id: 'jane.smith', urgency: '1', impact: '1', severity: '1' }
 };
-const defaultIncidentConfig = { assignment_group: 'DevOps Shared', caller_id: 'servicenow.integration', urgency: '3', impact: '3', severity: '3' };
+const defaultIncidentConfig = {
+  assignment_group: 'DevOps Shared',
+  caller_id: 'servicenow.integration',
+  urgency: '3',
+  impact: '3',
+  severity: '3'
+};
 
 // Axios defaults
 axios.defaults.timeout = 10000; // 10s
@@ -54,7 +69,9 @@ axios.defaults.timeout = 10000; // 10s
 const tokenCache = { accessToken: null, expiresAt: 0 };
 
 function getTokenEndpoint() {
-  return SERVICENOW_OAUTH_TOKEN_URL || `${SERVICENOW_INSTANCE.replace(/\/+$/, '')}/oauth_token.do`;
+  // Use explicit token URL if provided; otherwise fall back to instance oauth_token.do
+  const base = SERVICENOW_INSTANCE.replace(/\/+$/, '');
+  return SERVICENOW_OAUTH_TOKEN_URL || `${base}/oauth_token.do`;
 }
 
 // Fetch & cache OAuth token
@@ -93,18 +110,21 @@ async function getAccessToken() {
 
 // Simple payload guard
 function isSonarWebhookPayload(body) {
-  return body &&
+  return (
+    body &&
     body.project &&
     typeof body.project.key === 'string' &&
     body.qualityGate &&
-    typeof body.qualityGate.status === 'string';
+    typeof body.qualityGate.status === 'string'
+  );
 }
 
 // Generic retry helper with 401 token refresh handling
 async function retryRequest(fn, attempts, delayMs) {
-  const attemptsNum = Number(attempts) || 3;
-  const delay = Number(delayMs) || 2000;
+  const attemptsNum = Number(attempts || 3);
+  const delay = Number(delayMs || 2000);
   let lastErr;
+
   for (let i = 1; i <= attemptsNum; i++) {
     try {
       return await fn();
@@ -121,10 +141,11 @@ async function retryRequest(fn, attempts, delayMs) {
       }
 
       logger.error({ message: `Attempt ${i} failed`, status, error: msg });
-      if (i < attemptsNum) await new Promise(res => setTimeout(res, delay));
+      if (i < attemptsNum) await new Promise((res) => setTimeout(res, delay));
     }
   }
-  throw lastErr || new Error('All retry attempts failed');
+
+  throw (lastErr || new Error('All retry attempts failed'));
 }
 
 // Health
@@ -154,7 +175,14 @@ app.post('/sonarqube-webhook', async (req, res) => {
     return res.status(400).send('Project not allowed');
   }
 
-  logger.info({ message: 'Webhook received', projectKey, qualityGateStatus, branchName, analysedAt, taskStatus });
+  logger.info({
+    message: 'Webhook received',
+    projectKey,
+    qualityGateStatus,
+    branchName,
+    analysedAt,
+    taskStatus
+  });
 
   // Skip if Quality Gate OK
   if (qualityGateStatus === 'OK') {
@@ -164,25 +192,33 @@ app.post('/sonarqube-webhook', async (req, res) => {
 
   // Summarize violated conditions
   const violated = conditions
-    .filter(c => c.status === 'ERROR' || c.status === 'WARN')
-    .map(c => `• ${c.metric} ${c.status} (value: ${c.value ?? ''}, operator: ${c.operator || ''}, threshold: ${c.errorThreshold ?? ''})`);
+    .filter((c) => c.status === 'ERROR' || c.status === 'WARN')
+    .map(
+      (c) =>
+        `• ${c.metric} ${c.status} (value: ${c.value ?? ''}, operator: ${c.operator ?? ''}, threshold: ${c.errorThreshold ?? ''})`
+    );
 
-  const conditionsSummary = violated.length ? violated.join('\n') : 'No violations; all conditions passed or not applicable.';
+  const conditionsSummary =
+    violated.length ? violated.join('\n') : 'No violations; all conditions passed or not applicable.';
 
-  const shortDescription = `SonarQube Quality Gate: ${qualityGateStatus} — ${projectName}${branchName ? ` [${branchName}]` : ''}`;
+  const shortDescription = `SonarQube Quality Gate: ${qualityGateStatus} — ${projectName}${
+    branchName ? ` [${branchName}]` : ''
+  }`;
 
   const description = [
     `Project: ${projectName} (${projectKey})`,
     branchName ? `Branch: ${branchName}` : null,
-    `Analysed At: ${analysedAt || 'N/A'}`,
-    `Task Status: ${taskStatus || 'N/A'}`,
+    `Analysed At: ${analysedAt ?? 'N/A'}`,
+    `Task Status: ${taskStatus ?? 'N/A'}`,
     `Quality Gate Status: ${qualityGateStatus}`,
     '',
     'Conditions:',
     conditionsSummary,
     '',
     dashboardUrl ? `SonarQube Dashboard: ${dashboardUrl}` : null
-  ].filter(Boolean).join('\n');
+  ]
+    .filter(Boolean)
+    .join('\n');
 
   // Resolve routing
   const routing = projectIncidentConfig[projectKey] || defaultIncidentConfig;
@@ -191,8 +227,11 @@ app.post('/sonarqube-webhook', async (req, res) => {
   // Incident creation using OAuth Bearer
   const createIncident = async () => {
     const token = await getAccessToken();
+    const base = SERVICENOW_INSTANCE.replace(/\/+$/, '');
+    const url = `${base}/api/now/table/${SERVICENOW_TABLE}`;
+
     return axios.post(
-      `${SERVICENOW_INSTANCE.replace(/\/+$/, '')}/api/now/table/${SERVICENOW_TABLE}`,
+      url,
       {
         short_description: shortDescription,
         description,
@@ -207,7 +246,7 @@ app.post('/sonarqube-webhook', async (req, res) => {
       {
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          Authorization: `Bearer ${token}`
         }
       }
     );
@@ -216,8 +255,19 @@ app.post('/sonarqube-webhook', async (req, res) => {
   try {
     const resp = await retryRequest(createIncident, RETRY_ATTEMPTS, RETRY_DELAY_MS);
     const incidentNumber = resp?.data?.result?.number;
-    logger.info({ message: 'Incident created', incidentNumber, projectKey, assignment_group, caller_id, urgency, impact, severity });
-    return res.status(200).json({ status: 'ok', incidentNumber, assignment_group, caller_id, urgency, impact, severity });
+    logger.info({
+      message: 'Incident created',
+      incidentNumber,
+      projectKey,
+      assignment_group,
+      caller_id,
+      urgency,
+      impact,
+      severity
+    });
+    return res
+      .status(200)
+      .json({ status: 'ok', incidentNumber, assignment_group, caller_id, urgency, impact, severity });
   } catch (err) {
     const status = err?.response?.status;
     const msg = err?.response?.data || err.message || String(err);
@@ -226,4 +276,4 @@ app.post('/sonarqube-webhook', async (req, res) => {
   }
 });
 
-app.listen(Number(PORT), () => logger.info({ message: `Gateway running on port ${PORT}` }));
+// Start server
